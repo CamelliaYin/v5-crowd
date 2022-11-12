@@ -1218,3 +1218,60 @@ def create_classification_dataloader(path,
                               pin_memory=PIN_MEMORY,
                               worker_init_fn=seed_worker,
                               generator=generator)  # or DataLoader(persistent_workers=True)
+
+
+def convert_2_original_name(file_name, replace_dict):
+    original_file_name = file_name
+    for key in replace_dict.keys():
+        if file_name.endswith(key):
+            original_file_name = file_name.replace(key, replace_dict[key])
+            break
+    return original_file_name
+
+
+def create_train_val_image_list(img_path, k=5, kth=1, n_repeat=4, save_dir='./'):
+
+    file_train = str(save_dir) + 'fold_{}_train_image.txt'.format(kth)
+    file_val = str(save_dir) + 'fold_{}_val_image.txt'.format(kth)
+    if os.path.exists(file_train) and os.path.exists(file_val):
+        return file_train, file_val
+
+    img_PATH = Path(img_path)
+    val_ratio = 1 / k
+
+    image_file_list = glob.glob(str(img_PATH / '**' / '*.*'), recursive=True)
+
+    num_total_samples = len(image_file_list)
+    num_samples_per_fold = round(val_ratio * num_total_samples)
+    split_interval = [int(num_samples_per_fold * i) for i in range(k + 1)]
+
+    image_train_file_list = image_file_list[split_interval[0]:split_interval[kth - 1]] + image_file_list[
+                                                                                         split_interval[kth]:
+                                                                                         split_interval[-1]]
+    image_val_file_list = image_file_list[split_interval[kth - 1]:split_interval[kth]]
+
+    repeat_suffices = tuple(['_{}.JPG'.format(i + 1) for i in range(n_repeat)])
+    replace_dict = {repeat_suffices[i]: '.JPG' for i in range(n_repeat)}
+
+    image_train_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
+                                      image_train_file_list]
+    image_val_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
+                                    image_val_file_list]
+
+    image_val_file_list_clean = [image for image in image_val_original_file_list if
+                                 image not in image_train_original_file_list]
+    image_val_file_list_clean = list(set(image_val_file_list_clean))
+    image_val_file_list_clean.sort()
+
+    with open(file_train, 'a') as f:
+        for file_name in image_train_file_list:
+            f.write(file_name + '\n')
+    f.close()
+
+    with open(file_val, 'a') as f:
+        for file_name in image_val_file_list_clean:
+            f.write(file_name + '\n')
+    f.close()
+
+    return file_train, file_val
+

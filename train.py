@@ -45,7 +45,7 @@ from models.yolo import Model
 from utils.autoanchor import check_anchors
 from utils.autobatch import check_train_batch_size
 from utils.callbacks import Callbacks
-from utils.dataloaders import create_dataloader
+from utils.dataloaders import create_dataloader, create_train_val_image_list
 from utils.downloads import attempt_download, is_url
 from utils.general import (LOGGER, check_amp, check_dataset, check_file, check_git_status, check_img_size,
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
@@ -65,9 +65,9 @@ WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = \
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, img_path, k_fold = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
-        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze
+        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.image_path, opt.k_fold
     callbacks.run('on_pretrain_routine_start')
 
     # Directories
@@ -180,6 +180,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info('Using SyncBatchNorm()')
+
+    train_path, val_path = create_train_val_image_list(img_path, k=5, kth=k_fold, n_repeat=4, save_dir=save_dir)
 
     # Trainloader
     train_loader, dataset = create_dataloader(train_path,
@@ -463,6 +465,8 @@ def parse_opt(known=False):
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--seed', type=int, default=0, help='Global training seed')
     parser.add_argument('--local_rank', type=int, default=-1, help='Automatic DDP Multi-GPU argument, do not modify')
+    parser.add_argument('--image_path', type=str, help='set up image path and ignore --data')
+    parser.add_argument('--k_fold', type=int, help='the k-th validation is running')
 
     # Logger arguments
     parser.add_argument('--entity', default=None, help='Entity')
@@ -627,4 +631,12 @@ def run(**kwargs):
 
 if __name__ == "__main__":
     opt = parse_opt()
+    opt.image_path = 'data/datasets/expert_469_200/images/train'
+    opt.k_fold = 4
+    opt.data = 'data/single_toy_iid.yaml'
+    opt.exist_ok = False
+    opt.batch_size = 16
+    opt.epochs = 1
+    opt.augment = True
+    opt.patience = 0
     main(opt)
