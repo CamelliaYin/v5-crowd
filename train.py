@@ -182,7 +182,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         LOGGER.info('Using SyncBatchNorm()')
 
     train_path, val_path = create_train_val_image_list(img_path, k=5, kth=k_fold, n_repeat=4, save_dir=save_dir)
-
+    include_class = opt.include_class
     # Trainloader
     train_loader, dataset = create_dataloader(train_path,
                                               imgsz,
@@ -198,7 +198,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                               image_weights=opt.image_weights,
                                               quad=opt.quad,
                                               prefix=colorstr('train: '),
-                                              shuffle=True)
+                                              shuffle=True,
+                                              include_class=include_class)
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
@@ -216,11 +217,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                        rank=-1,
                                        workers=workers * 2,
                                        pad=0.5,
-                                       prefix=colorstr('val: '))[0]
+                                       prefix=colorstr('val: '),
+                                       include_class=include_class)[0]
 
         if not resume:
             if not opt.noautoanchor:
-                check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)  # run AutoAnchor
+                check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz, include_class=include_class)  # run AutoAnchor
             model.half().float()  # pre-reduce anchor precision
 
         callbacks.run('on_pretrain_routine_end', labels, names)
@@ -243,7 +245,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     # Start training
     t0 = time.time()
     nb = len(train_loader)  # number of batches
-    nw = max(round(hyp['warmup_epochs'] * nb), 100)  # number of warmup iterations, max(3 epochs, 100 iterations)
+    nw = max(round(hyp['warmup_epochs'] * nb), 30)  # number of warmup iterations, max(3 epochs, 100 iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     last_opt_step = -1
     maps = np.zeros(nc)  # mAP per class
@@ -434,7 +436,7 @@ def parse_opt(known=False):
     parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.scratch-low.yaml', help='hyperparameters path')
+    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.dental.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=100, help='total training epochs')
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
@@ -467,6 +469,7 @@ def parse_opt(known=False):
     parser.add_argument('--local_rank', type=int, default=-1, help='Automatic DDP Multi-GPU argument, do not modify')
     parser.add_argument('--image_path', type=str, help='set up image path and ignore --data')
     parser.add_argument('--k_fold', type=int, help='the k-th validation is running')
+    parser.add_argument('--include_class', type=list, help='include class list')
 
     # Logger arguments
     parser.add_argument('--entity', default=None, help='Entity')
@@ -632,11 +635,15 @@ def run(**kwargs):
 if __name__ == "__main__":
     opt = parse_opt()
     opt.image_path = 'data/datasets/expert_469_200/images/train'
-    opt.k_fold = 4
-    opt.data = 'data/single_toy_iid.yaml'
+    opt.k_fold = 2
+    opt.data = 'data/dental.yaml'
     opt.exist_ok = False
-    opt.batch_size = 16
-    opt.epochs = 1
+    opt.batch_size = 64
+    opt.epochs = 100
     opt.augment = True
     opt.patience = 0
+    opt.include_class = [1]
+    opt.imgsz = 640
+    opt.noautoanchor = True
+    opt.optimizer = 'SGD'
     main(opt)

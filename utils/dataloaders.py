@@ -116,7 +116,8 @@ def create_dataloader(path,
                       image_weights=False,
                       quad=False,
                       prefix='',
-                      shuffle=False):
+                      shuffle=False,
+                      include_class=None):
     if rect and shuffle:
         LOGGER.warning('WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
@@ -133,7 +134,8 @@ def create_dataloader(path,
             stride=int(stride),
             pad=pad,
             image_weights=image_weights,
-            prefix=prefix)
+            prefix=prefix,
+            include_class=include_class)
 
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
@@ -447,7 +449,8 @@ class LoadImagesAndLabels(Dataset):
                  stride=32,
                  pad=0.0,
                  min_items=0,
-                 prefix=''):
+                 prefix='',
+                 include_class=None):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -528,7 +531,10 @@ class LoadImagesAndLabels(Dataset):
         self.indices = range(n)
 
         # Update labels
-        include_class = []  # filter labels to include only these classes (optional)
+        if include_class is None:
+            include_class = []  # filter labels to include only these classes (optional)
+        else:
+            include_class = list(include_class)
         include_class_array = np.array(include_class).reshape(1, -1)
         for i, (label, segment) in enumerate(zip(self.labels, self.segments)):
             if include_class:
@@ -1053,7 +1059,7 @@ class HUBDatasetStats():
         stats.process_images()
     """
 
-    def __init__(self, path='coco128.yaml', autodownload=False):
+    def __init__(self, path='coco128.yaml', autodownload=False, include_class = None):
         # Initialize class
         zipped, data_dir, yaml_path = self._unzip(Path(path))
         try:
@@ -1110,7 +1116,7 @@ class HUBDatasetStats():
                 im = cv2.resize(im, (int(im_width * r), int(im_height * r)), interpolation=cv2.INTER_AREA)
             cv2.imwrite(str(f_new), im)
 
-    def get_json(self, save=False, verbose=False):
+    def get_json(self, save=False, verbose=False, include_class=None):
         # Return dataset JSON for Ultralytics HUB
         def _round(labels):
             # Update labels to integer class and 6 decimal place floats
@@ -1120,7 +1126,7 @@ class HUBDatasetStats():
             if self.data.get(split) is None:
                 self.stats[split] = None  # i.e. no test set
                 continue
-            dataset = LoadImagesAndLabels(self.data[split])  # load dataset
+            dataset = LoadImagesAndLabels(self.data[split], include_class=include_class)  # load dataset
             x = np.array([
                 np.bincount(label[:, 0].astype(int), minlength=self.data['nc'])
                 for label in tqdm(dataset.labels, total=dataset.n, desc='Statistics')])  # shape(128x80)
@@ -1145,12 +1151,12 @@ class HUBDatasetStats():
             print(json.dumps(self.stats, indent=2, sort_keys=False))
         return self.stats
 
-    def process_images(self):
+    def process_images(self, include_class=None):
         # Compress images for Ultralytics HUB
         for split in 'train', 'val', 'test':
             if self.data.get(split) is None:
                 continue
-            dataset = LoadImagesAndLabels(self.data[split])  # load dataset
+            dataset = LoadImagesAndLabels(self.data[split], include_class = include_class)  # load dataset
             desc = f'{split} images'
             for _ in tqdm(ThreadPool(NUM_THREADS).imap(self._hub_ops, dataset.im_files), total=dataset.n, desc=desc):
                 pass
@@ -1219,7 +1225,6 @@ def create_classification_dataloader(path,
                               worker_init_fn=seed_worker,
                               generator=generator)  # or DataLoader(persistent_workers=True)
 
-
 def convert_2_original_name(file_name, replace_dict):
     original_file_name = file_name
     for key in replace_dict.keys():
@@ -1231,37 +1236,42 @@ def convert_2_original_name(file_name, replace_dict):
 
 def create_train_val_image_list(img_path, k=5, kth=1, n_repeat=4, save_dir='./'):
 
-    file_train = str(save_dir) + 'fold_{}_train_image.txt'.format(kth)
-    file_val = str(save_dir) + 'fold_{}_val_image.txt'.format(kth)
+    file_train = str(save_dir) + '//fold_{}_train_image.txt'.format(kth)
+    file_val = str(save_dir) + '//fold_{}_val_image.txt'.format(kth)
     if os.path.exists(file_train) and os.path.exists(file_val):
         return file_train, file_val
 
     img_PATH = Path(img_path)
     val_ratio = 1 / k
 
-    image_file_list = glob.glob(str(img_PATH / '**' / '*.*'), recursive=True)
-
-    num_total_samples = len(image_file_list)
-    num_samples_per_fold = round(val_ratio * num_total_samples)
-    split_interval = [int(num_samples_per_fold * i) for i in range(k + 1)]
-
-    image_train_file_list = image_file_list[split_interval[0]:split_interval[kth - 1]] + image_file_list[
-                                                                                         split_interval[kth]:
-                                                                                         split_interval[-1]]
-    image_val_file_list = image_file_list[split_interval[kth - 1]:split_interval[kth]]
-
     repeat_suffices = tuple(['_{}.JPG'.format(i + 1) for i in range(n_repeat)])
     replace_dict = {repeat_suffices[i]: '.JPG' for i in range(n_repeat)}
 
-    image_train_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
-                                      image_train_file_list]
-    image_val_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
-                                    image_val_file_list]
+    image_file_list = glob.glob(str(img_PATH / '**' / '*.*'), recursive=True)
+    image_file_list_original_no_repeat = list(set([convert_2_original_name(file_name, replace_dict) for file_name in image_file_list]))
+    image_file_list_original_no_repeat.sort()
 
-    image_val_file_list_clean = [image for image in image_val_original_file_list if
-                                 image not in image_train_original_file_list]
-    image_val_file_list_clean = list(set(image_val_file_list_clean))
-    image_val_file_list_clean.sort()
+    num_total_samples = len(image_file_list_original_no_repeat)
+    num_samples_per_fold = round(val_ratio * num_total_samples)
+    split_interval = [int(num_samples_per_fold * i) for i in range(k + 1)]
+
+    image_val_file_list = image_file_list_original_no_repeat[split_interval[kth - 1]:split_interval[kth]]
+
+    image_train_file_list = [image for image in image_file_list if convert_2_original_name(image, replace_dict) not in image_val_file_list]
+
+    # image_train_file_list = image_file_list[split_interval[0]:split_interval[kth - 1]] + image_file_list[
+    #                                                                                      split_interval[kth]:
+    #                                                                                      split_interval[-1]]
+    # image_train_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
+    #                                   image_train_file_list]
+    # image_val_original_file_list = [convert_2_original_name(file_name, replace_dict) for file_name in
+    #                                 image_val_file_list]
+    #
+    # image_val_file_list_clean = [image for image in image_val_original_file_list if
+    #                              image not in image_train_original_file_list]
+    # image_val_file_list_clean = list(set(image_val_file_list_clean))
+    image_train_file_list.sort()
+    image_val_file_list.sort()
 
     with open(file_train, 'a') as f:
         for file_name in image_train_file_list:
@@ -1269,7 +1279,7 @@ def create_train_val_image_list(img_path, k=5, kth=1, n_repeat=4, save_dir='./')
     f.close()
 
     with open(file_val, 'a') as f:
-        for file_name in image_val_file_list_clean:
+        for file_name in image_val_file_list:
             f.write(file_name + '\n')
     f.close()
 
